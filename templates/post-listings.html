@@ -28,6 +28,77 @@
         pointer-events: auto !important;
         opacity: 1 !important;
       }
+      #listingForm .listing-choice-title {
+        font-size: 16px;
+        font-weight: 500;
+        margin-bottom: 10px;
+      }
+      #listingForm .listing-choice-cards {
+        display: flex;
+        gap: 12px;
+      }
+      #listingForm .listing-choice-card {
+        flex: 1;
+        min-width: 0;
+        margin: 0;
+        padding: 16px;
+        text-align: left;
+        color: #000;
+        background: #fff;
+        border: 2px solid #e0e0e0;
+        border-radius: 6px;
+        box-shadow: none;
+      }
+      #listingForm .listing-choice-card:hover {
+        border-color: #1a73e8;
+        background: #f7faff;
+        box-shadow: none;
+      }
+      #listingForm .listing-choice-card[aria-pressed="true"] {
+        border-color: #1a73e8;
+        background: #edf4ff;
+      }
+      #listingForm .listing-choice-card:focus-visible {
+        outline: 3px solid #1a73e8;
+        outline-offset: 2px;
+      }
+      #listingForm .listing-choice-name,
+      #listingForm .listing-choice-description {
+        display: block;
+      }
+      #listingForm .listing-choice-name {
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      #listingForm .listing-choice-description,
+      #listingForm .price-help {
+        font-size: 14px;
+        line-height: 1.4;
+        color: #555;
+      }
+      #listingForm .price-help {
+        margin: 8px 0 0;
+      }
+      #post-listing-submit {
+        min-width: 230px;
+        max-width: none;
+      }
+      #post-listing-submit:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+      }
+      @media (max-width: 600px) {
+        #listingForm .listing-choice-cards {
+          flex-direction: column;
+        }
+        #post-listing-submit {
+          width: 100%;
+          min-width: 0;
+        }
+      }
     </style>
     <script>
     ;(function(){
@@ -101,9 +172,22 @@
       <section style="max-width: 1000px; margin: 20px auto; padding: 20px;">
         <div class="seller-form">
           <form id="listingForm" action="/submit_listing" method="POST" onsubmit="return requireSignIn(event)">
+            <div class="form-group" role="group" aria-labelledby="listing-choice-title">
+              <div class="listing-choice-title" id="listing-choice-title">What would you like to do?</div>
+              <div class="listing-choice-cards">
+                <button type="button" class="listing-choice-card" data-listing-type="seller" aria-pressed="false">
+                  <span class="listing-choice-name">Sell a Swipe</span>
+                  <span class="listing-choice-description">I have a meal plan and can swipe someone in.</span>
+                </button>
+                <button type="button" class="listing-choice-card" data-listing-type="buyer" aria-pressed="false">
+                  <span class="listing-choice-name">Buy a Swipe</span>
+                  <span class="listing-choice-description">I need someone with a meal plan to swipe me in.</span>
+                </button>
+              </div>
+            </div>
             <div class="form-group">
               <label>Dining hall:</label>
-              <div class="checkbox-group two-columns">
+              <div class="checkbox-group two-columns" id="dining-hall-group">
                 <div class="checkbox-item">
                   <input type="checkbox" id="john_jay" name="dining_hall[]" value="John Jay">
                   <label for="john_jay">John Jay</label>
@@ -172,16 +256,17 @@
             </div>
             
             <div class="form-group">
-              <label for="price">Price ($0 to donate):</label>
+              <label for="price" id="price-label">Price ($0 to donate)</label>
               <div class="price-input-wrapper">
                 <span class="dollar-sign">$</span>
                 <input type="number" id="price" name="price" min="0" step="0.01" placeholder="Enter price" required>
               </div>
+              <p class="price-help" id="price-help" hidden></p>
             </div>
             
             <div class="form-group">
               <label>Payment Methods:</label>
-              <div class="checkbox-group two-columns">
+              <div class="checkbox-group two-columns" id="payment-method-group">
                 <div class="checkbox-item">
                   <input type="checkbox" id="venmo" name="payment_methods[]" value="Venmo">
                   <label for="venmo">Venmo</label>
@@ -218,8 +303,7 @@
             <input type="hidden" name="listing_type" id="listing_type" value="">
             
             <div class="form-group button-group">
-              <button type="submit" class="offer-button" onclick="setListingType('seller')">Offer to Sell</button>
-              <button type="submit" class="request-button" onclick="setListingType('buyer')">Offer to Buy</button>
+              <button type="submit" class="offer-button" id="post-listing-submit" disabled>Select Buy or Sell to Continue</button>
             </div>
           </form>
         </div>
@@ -232,8 +316,52 @@
     <script src="../static/forms.js" type="text/javascript"></script>
     <script>
       document.addEventListener('DOMContentLoaded', function() {
+        const listingForm = document.getElementById('listingForm');
+        const listingTypeInput = document.getElementById('listing_type');
+        const listingChoices = listingForm.querySelectorAll('.listing-choice-card');
+        const priceLabel = document.getElementById('price-label');
+        const priceHelp = document.getElementById('price-help');
+        const submitButton = document.getElementById('post-listing-submit');
+        const copy = {
+          seller: {
+            price: "Price you'll receive ($)",
+            help: 'Amount you want to charge for a swipe.',
+            submit: 'Post Selling Offer'
+          },
+          buyer: {
+            price: "Price you're willing to pay ($)",
+            help: "Amount you're offering someone to swipe you in.",
+            submit: 'Post Buying Request'
+          }
+        };
+
+        listingChoices.forEach(choice => {
+          choice.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              this.click();
+            }
+          });
+          choice.addEventListener('click', function() {
+            const type = this.dataset.listingType;
+            setListingType(type);
+            listingChoices.forEach(card => {
+              card.setAttribute('aria-pressed', String(card === this));
+            });
+            priceLabel.textContent = copy[type].price;
+            priceHelp.textContent = copy[type].help;
+            priceHelp.hidden = false;
+            submitButton.textContent = copy[type].submit;
+            submitButton.disabled = false;
+          });
+        });
+
+        listingForm.addEventListener('submit', function(event) {
+          if (!listingTypeInput.value) event.preventDefault();
+        });
+
         // Handle dining hall checkboxes
-        const diningHallGroup = document.querySelector('.form-group:first-child .checkbox-group');
+        const diningHallGroup = document.getElementById('dining-hall-group');
         const anyDiningHall = document.getElementById('dining_any');
         anyDiningHall.closest('.checkbox-item').classList.add('any-checkbox');
         
@@ -241,7 +369,7 @@
           if (this.checked) {
             diningHallGroup.classList.add('disabled');
             // Uncheck all other checkboxes
-            document.querySelectorAll('.form-group:first-child input[type="checkbox"]:not(#dining_any)').forEach(checkbox => {
+            diningHallGroup.querySelectorAll('input[type="checkbox"]:not(#dining_any)').forEach(checkbox => {
               checkbox.checked = false;
             });
           } else {
@@ -250,7 +378,7 @@
         });
 
         // Handle payment method checkboxes
-        const paymentGroup = document.querySelector('.form-group:nth-child(5) .checkbox-group');
+        const paymentGroup = document.getElementById('payment-method-group');
         const anyPayment = document.getElementById('payment_any');
         anyPayment.closest('.checkbox-item').classList.add('any-checkbox');
         
@@ -258,7 +386,7 @@
           if (this.checked) {
             paymentGroup.classList.add('disabled');
             // Uncheck all other checkboxes
-            document.querySelectorAll('.form-group:nth-child(5) input[type="checkbox"]:not(#payment_any)').forEach(checkbox => {
+            paymentGroup.querySelectorAll('input[type="checkbox"]:not(#payment_any)').forEach(checkbox => {
               checkbox.checked = false;
             });
           } else {
