@@ -10,7 +10,7 @@ import boto3
 import string
 import pytz
 from  flask_sqlalchemy import SQLAlchemy
-from flask import make_response, g, render_template, flash
+from flask import g, render_template, flash
 from flask import session, flash, redirect, url_for
 #from flask_mail import Mail, Message
 from flask_migrate import Migrate
@@ -80,10 +80,16 @@ def extract_uni(email):
     return None
 
 
+def is_authenticated_session():
+    user_email = session.get('user_email')
+    return bool(session.get('user_id') and user_email and
+                session.get('verified_email') == user_email)
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if 'user_email' not in session:
+        if not is_authenticated_session():
             flash('Please sign in to continue', 'error')
             return redirect(url_for('index'))
         return f(*args, **kwargs)
@@ -265,11 +271,23 @@ def google_auth():
 
         session['user_id'] = idinfo['sub']
         session['user_email'] = email
+        session['verified_email'] = email
         session.permanent = True
         return jsonify(success=True)
     except ValueError as e:
         # Invalid token or wrong audience/domain
         return jsonify(success=False, error=str(e)), 401
+
+@app.route('/api/auth/logout', methods=['POST'])
+def google_logout():
+    session.clear()
+    return jsonify(success=True)
+
+@app.route('/api/auth/status')
+def auth_status():
+    authenticated = is_authenticated_session()
+    return jsonify(authenticated=authenticated,
+                   email=session['user_email'] if authenticated else None)
 
 CLIENT_CONFIG = {
   "web": {
@@ -339,8 +357,8 @@ def index():
     seller_listings = SellerListing.query.filter_by(is_active=True).all()
     buyer_listings = BuyerListing.query.filter_by(is_active=True).all()
 
-    #try to get user email
-    current_user_email = request.args.get('email') or session.get('user_email')
+    # Use only the email established by a verified sign-in.
+    current_user_email = session.get('user_email') if is_authenticated_session() else None
     
     
     if current_user_email:
@@ -385,14 +403,8 @@ def index():
         listing.start_time = format_time_to_12hour(listing.start_time)
         listing.end_time = format_time_to_12hour(listing.end_time)
     
-    # Create a response
-    response = make_response(render_template('index.html', seller_listings=seller_listings, buyer_listings=buyer_listings))
-    
-   #if we have a user email, persist it in the session only
-    if current_user_email:
-        session['user_email'] = current_user_email
-
-    return response
+    return render_template('index.html', seller_listings=seller_listings,
+                           buyer_listings=buyer_listings, current_user_email=current_user_email)
 
 
 
@@ -674,7 +686,7 @@ def delete_listing(listing_id):
 
     listing = (SellerListing if listing_type == 'seller' else BuyerListing).query.get_or_404(listing_id)
     if listing.user.email.lower() != user_email.lower():
-        return f"Unauthorized - You don't own this listing. User email: {user_email}, Listing owner email: {listing.user.email}", 403
+        return "Unauthorized - You don't own this listing", 403
 
     listing.is_active = False
     db.session.commit()
@@ -685,12 +697,14 @@ def delete_listing(listing_id):
 @app.route('/api/check_user', methods=['POST'])
 @login_required
 def check_user():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     email = data.get('email')
-    if not email:
+    if not isinstance(email, str) or not email:
         return jsonify({"exists": False, "error": "Email is required"}), 400
+    if email.lower() != session['user_email'].lower():
+        return jsonify({"exists": False, "error": "Unauthorized"}), 403
     
-    user = User.query.filter_by(email=email).first()
+    user = User.query.filter_by(email=session['user_email']).first()
     if user:
         return jsonify({
             "exists": True, 
@@ -1026,7 +1040,6 @@ def submit_listing():
         
     payment_methods = ', '.join(payment_methods_list)
     
-    poster_email = request.form.get('poster_email')
     listing_type = request.form.get('listing_type')
 
     # Validate that if date is today, end time is in the future
@@ -1054,7 +1067,10 @@ def submit_listing():
         flash("Error: Please enter a valid price (number).", "error")
         return redirect(url_for('post_listings'))
 
-    user = User.query.filter_by(email=poster_email).first()
+    user = User.query.filter_by(email=user_email).first()
+    if not user:
+        flash("Error: Please complete your profile before posting.", "error")
+        return redirect(url_for('post_listings'))
 
     # Create new listing based on type
     if listing_type == 'seller':

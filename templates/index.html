@@ -169,7 +169,7 @@
                       data-listing-type="seller" 
                       onclick="openForm(this)">Get Swiped In</button>
               <!--delete button that only appears to poster-->
-              <div class="listing-actions" data-owner-email="{{ listing.user.email }}">
+              <div class="listing-actions" data-is-owner="{{ 'true' if current_user_email and listing.user.email.lower() == current_user_email.lower() else 'false' }}">
                 <button onclick="deleteListing('{{ listing.id }}', 'seller')" class="delete-button">X</button>
                 <button onclick="editListing('{{ listing.id }}', 'seller')" class="edit-button">Edit</button>
               </div>
@@ -207,7 +207,7 @@
             <td>{{ listing.payment_methods }}</td>
             <td>
               <button type="button" class="contact-button" data-listing-id="{{ listing.id }}" data-listing-type="buyer" onclick="openForm(this)">Swipe Them In</button>
-              <div class="listing-actions" data-owner-email="{{ listing.user.email }}">
+              <div class="listing-actions" data-is-owner="{{ 'true' if current_user_email and listing.user.email.lower() == current_user_email.lower() else 'false' }}">
               <button onclick="deleteListing('{{ listing.id }}', 'buyer')" class="delete-button">X</button>
               <button onclick="editListing('{{ listing.id }}', 'buyer')" class="edit-button">Edit</button>
               </div>

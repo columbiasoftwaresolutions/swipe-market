@@ -171,11 +171,10 @@ console.log("googleCredential:", localStorage.getItem('googleCredential') ? "Pre
 // Check all listing actions to see what's visible
 console.log("Checking listing actions...");
 document.querySelectorAll('.listing-actions').forEach((actions, index) => {
-  const ownerEmail = actions.dataset.ownerEmail;
   const listingId = actions.previousElementSibling?.dataset?.listingId;
   const isVisible = actions.style.display !== 'none';
   console.log(`Listing #${index} (ID: ${listingId}):`, {
-    ownerEmail: ownerEmail,
+    isOwner: actions.dataset.isOwner,
     isVisible: isVisible
   });
 });
@@ -302,47 +301,56 @@ function handleCredentialResponse(response) {
       posterEmailField.value = responsePayload.email;
     }
   
-    // Update UI based on user's email
-    const userEmail = responsePayload.email;
-    console.log('User email from Google sign-in:', userEmail);
-    
-    // Show edit/delete buttons for listings owned by this user
-    document.querySelectorAll('.listing-actions').forEach(actions => {
-      const ownerEmail = actions.dataset.ownerEmail;
-      console.log('Checking ownership after login:', { 
-        ownerEmail: ownerEmail, 
-        userEmail: userEmail, 
-        isMatch: ownerEmail && userEmail && ownerEmail.toLowerCase() === userEmail.toLowerCase() 
-      });
-      
-      if (userEmail && actions.dataset.ownerEmail) {
-        const isOwner = actions.dataset.ownerEmail.toLowerCase() === userEmail.toLowerCase();
-        const contactButton = actions.previousElementSibling;
-        
-        if (isOwner) {
-          console.log('Found user listing to enable edit/delete for after login:', ownerEmail);
-          actions.style.display = 'inline-flex';
-          contactButton.style.display = 'none';
-        } else {
-          actions.style.display = 'none';
-          contactButton.style.display = 'inline-flex';
-        }
-      } else {
-        // If either email is missing, just hide the actions
-        actions.style.display = 'none';
-        if (actions.previousElementSibling) {
-          actions.previousElementSibling.style.display = 'inline-flex';
-        }
-      }
-    });
-    
     console.log('User logged in:', responsePayload.email);
+    // Refresh ownership controls and blocked listings using the new server session.
+    if (window.location.pathname === '/') {
+      window.location.reload();
+    }
   })
   .catch(err => {
     console.error('Error during sign-in process:', err);
     alert('Could not complete sign-in. Try again?');
   });
 }
+
+function restoreServerSession(credential, email) {
+  fetch('/api/auth/status', { credentials: 'same-origin' })
+    .then(response => {
+      if (!response.ok) throw new Error('Could not check sign-in status');
+      return response.json();
+    })
+    .then(status => {
+      if (status.authenticated && status.email.toLowerCase() === email.toLowerCase()) {
+        checkUserExistence(email);
+        fetchContactedListings();
+        return;
+      }
+      return fetch('/api/auth/google', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: credential })
+      })
+        .then(response => response.json())
+        .then(result => {
+          if (!result.success) {
+            handleTokenExpiration();
+            return;
+          }
+          if (window.location.pathname === '/') {
+            window.location.reload();
+          } else {
+            checkUserExistence(email);
+            fetchContactedListings();
+          }
+        });
+    })
+    .catch(error => {
+      console.error('Could not restore sign-in:', error);
+      handleTokenExpiration();
+    });
+}
+
 // Function to check if user exists in our database
 function checkUserExistence(email) {
   fetch('/api/check_user', {
@@ -564,30 +572,21 @@ function saveNewUser(phone, name) {
   });
 }
 
-//removes user's google credential from localStorage when they sign out.
-//also removes other information from localStorage.
 function handleSignOut() {
-  // Clear user data
-  localStorage.removeItem('googleCredential');
-  localStorage.removeItem('userName');
-  localStorage.removeItem('userImage');
-  localStorage.removeItem('userEmail');
-  localStorage.removeItem('userPhone');
-
-  //hide profile icon and show sign in button
-  
-  // Reset UI: hide profile icon and show sign in button
-  document.getElementById('profile-menu').style.display = 'none';
-  document.getElementById('g_id_signin').style.display = 'block';
-
-  console.log('User logged out');
-
-// Revoke token and redirect to home page
-  google.accounts.id.revoke(localStorage.getItem('googleCredential'), done => {
-    console.log('Token revoked');
-  // Redirect to home page
-  window.location.href = '/';
-  });
+  fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    .then(response => {
+      if (!response.ok) throw new Error('Server sign-out failed');
+      localStorage.removeItem('googleCredential');
+      localStorage.removeItem('userName');
+      localStorage.removeItem('userImage');
+      localStorage.removeItem('userEmail');
+      localStorage.removeItem('userPhone');
+      window.location.href = '/';
+    })
+    .catch(error => {
+      console.error('Error signing out:', error);
+      alert('Could not sign out. Please try again.');
+    });
 }
 // --- UTILITY FUNCTIONS ---
 
@@ -736,11 +735,7 @@ window.onload = function() {
         storeUserEmail(payload.email);
       }
 
-      // Check if user exists in database on page load
-      checkUserExistence(payload.email);
-      
-      // Send the user's email to the server for block filtering
-      //sendUserEmailToServer();
+      restoreServerSession(credential, payload.email);
     } else {
       // Token expired, remove it and reset UI
       console.log('Token expired on page load');
@@ -759,11 +754,6 @@ window.onload = function() {
   // Format time displays on page load
   formatTimeDisplay();
   
-  // Fetch contacted listings from the database only if user is logged in
-  if (isUserLoggedIn()) {
-    fetchContactedListings();
-  }
-
   // Set up periodic token validity checking
   setupTokenExpirationCheck();
 };
@@ -815,27 +805,17 @@ window.onclick = function(event) {
 //shows edit/delete buttons to poster only.
 //hides contact button from poster.
 document.addEventListener('DOMContentLoaded', function() {
-  // Show/hide edit/delete buttons based on user email
-  const userEmail = localStorage.getItem('userEmail');
+  // Ownership is determined by the server session, not public email addresses.
   document.querySelectorAll('.listing-actions').forEach(actions => {
-    if (userEmail && actions.dataset.ownerEmail) {
-      const isOwner = actions.dataset.ownerEmail.toLowerCase() === userEmail.toLowerCase();
-      const contactButton = actions.previousElementSibling;
-      
-      if (isOwner) {
-          actions.style.display = 'inline-flex';
-          contactButton.style.display = 'none';
-      } else {
-          actions.style.display = 'none';
-          contactButton.style.display = 'inline-flex';
-      }
+    const isOwner = isUserLoggedIn() && actions.dataset.isOwner === 'true';
+    const contactButton = actions.previousElementSibling;
+    if (isOwner) {
+      actions.style.display = 'inline-flex';
+      contactButton.style.display = 'none';
     } else {
-      // If either email is missing, just hide the actions
       actions.style.display = 'none';
-      if (actions.previousElementSibling) {
-        actions.previousElementSibling.style.display = 'inline-flex';
-      }
-      }
+      contactButton.style.display = 'inline-flex';
+    }
   });
 });
 
